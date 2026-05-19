@@ -1,0 +1,7 @@
+streamlit
+requests
+gspread
+google-auth
+matplotlib
+python-pptx
+lxml
