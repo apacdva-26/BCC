@@ -53,10 +53,18 @@ def generate_value_tree_png(
     maturity_label: str,
 ) -> bytes:
 
-    areas_layout = [
-        ["Asset Management", "Finance", "Manufacturing", "Sales"],
-        ["Procurement", "R&D", "Supply Chain"],
-    ]
+    # 선택된 영역만 추출해서 균등하게 행 배분
+    all_areas = ["Asset Management", "Finance", "Manufacturing", "Sales",
+                 "Procurement", "R&D", "Supply Chain"]
+    active_areas = [a for a in all_areas if a in results["by_area"]]
+    n_total = len(active_areas)
+
+    # 행 구성: n<=4이면 1행, 아니면 절반씩 2행
+    if n_total <= 4:
+        areas_layout = [active_areas]
+    else:
+        split = (n_total + 1) // 2  # 앞 행이 같거나 더 많게
+        areas_layout = [active_areas[:split], active_areas[split:]]
 
     # ── 캔버스: 작게 잡고 dpi 높여서 글자 비율 크게 ──────────────────────────
     FIG_W, FIG_H = 13.0, 7.5
