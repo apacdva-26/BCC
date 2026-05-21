@@ -169,6 +169,7 @@ def calculate_benefits(
     realization_recurring: list[float] | None = None,
     realization_onetime: list[float] | None = None,
     discount_rate_pct: float = 14.0,
+    scalar: float = 1.0,
 ) -> dict:
     overrides = improvement_overrides or {}
     real_rec = [r / 100.0 for r in (realization_recurring or [100.0] * 5)]
@@ -188,7 +189,7 @@ def calculate_benefits(
             baseline = _get_baseline(vd, revenue, industry, maturity)
             if baseline is None:
                 continue
-            imp_pct = overrides.get(vd["name"], vd["improvement_pct"])
+            imp_pct = overrides.get(vd["name"], vd["improvement_pct"]) * scalar
             benefit = baseline * (imp_pct / 100.0)
             is_one_time = vd.get("one_time", False)
             area_total_recurring += 0 if is_one_time else benefit
@@ -291,4 +292,85 @@ def calculate_benefits(
         "irr_pct": irr_pct,
         "discount_rate_pct": discount_rate_pct,
         "payback_years": payback_years,
+        "scalar": scalar,
     }
+
+
+def find_scalar(
+    revenue: float,
+    acv_by_year: list[float],
+    impl_cost: float,
+    num_users: int,
+    avg_salary: float,
+    productivity_pct: float,
+    selected_areas: list[str],
+    industry: str,
+    maturity: str,
+    improvement_overrides: dict[str, float] | None = None,
+    realization_recurring: list[float] | None = None,
+    realization_onetime: list[float] | None = None,
+    discount_rate_pct: float = 14.0,
+    irr_target: tuple[float, float] = (15.0, 60.0),
+    payback_target: tuple[float, float] = (2.0, 3.0),
+    n_iter: int = 60,
+) -> float:
+    """Return a scalar (0,1] such that IRR lands in irr_target, Payback in payback_target.
+    IRR range is the primary constraint; Payback is secondary.
+    Falls back to 1.0 if the target is unreachable."""
+
+    def _run(s: float) -> dict:
+        return calculate_benefits(
+            revenue, acv_by_year, impl_cost, num_users, avg_salary,
+            productivity_pct, selected_areas, industry, maturity,
+            improvement_overrides=improvement_overrides,
+            realization_recurring=realization_recurring,
+            realization_onetime=realization_onetime,
+            discount_rate_pct=discount_rate_pct,
+            scalar=s,
+        )
+
+    irr_lo, irr_hi = irr_target
+    pb_lo, pb_hi = payback_target
+
+    # If scalar=1.0 already satisfies both, return early
+    r1 = _run(1.0)
+    irr1 = r1["irr_pct"]
+    pb1  = r1["payback_years"]
+    if irr1 is not None and irr_lo <= irr1 <= irr_hi and pb_lo <= pb1 <= pb_hi:
+        return 1.0
+
+    # Binary search: find scalar where IRR is within [irr_lo, irr_hi]
+    # scalar↑ → benefit↑ → IRR↑, so it's monotone
+    lo, hi = 0.001, 1.0
+    best_scalar = 1.0  # fallback
+    best_irr_ok = False
+
+    for _ in range(n_iter):
+        mid = (lo + hi) / 2
+        r = _run(mid)
+        irr = r["irr_pct"]
+        pb  = r["payback_years"]
+
+        irr_ok = irr is not None and irr_lo <= irr <= irr_hi
+        pb_ok  = pb_lo <= pb <= pb_hi
+
+        if irr_ok:
+            best_scalar  = mid
+            best_irr_ok  = True
+            if pb_ok:
+                # Both conditions met — try to widen scalar toward 1.0 while keeping IRR ok
+                lo = mid
+            else:
+                # IRR ok but payback not — keep searching
+                if pb < pb_lo:
+                    # payback too short (too much benefit) → lower scalar
+                    hi = mid
+                else:
+                    # payback too long → raise scalar
+                    lo = mid
+        elif irr is None or irr < irr_lo:
+            lo = mid  # too little benefit
+        else:  # irr > irr_hi
+            hi = mid  # too much benefit
+
+    return best_scalar

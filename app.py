@@ -6,7 +6,7 @@ import re
 
 import streamlit as st
 from storage import load_config, load_settings, BUSINESS_AREAS, INDUSTRIES
-from calculator import calculate_benefits
+from calculator import calculate_benefits, find_scalar
 from sheets import log_opportunity
 
 APAC_CURRENCIES = {
@@ -242,163 +242,203 @@ for i in range(1, 5):
 
 st.divider()
 
-# ── Calculate ─────────────────────────────────────────────────────────────────
+# ── Validation ────────────────────────────────────────────────────────────────
+_ready = True
 if not selected_areas:
     st.warning("Please select at least one Business Area.")
-    st.stop()
-
+    _ready = False
 if revenue is None or impl_cost is None or num_users is None:
     st.info("Please fill in all customer profile fields above to see the results.")
-    st.stop()
-
+    _ready = False
 if industry is None:
     st.info("Please select a customer industry above to see the results.")
-    st.stop()
+    _ready = False
 
-vd_config = load_config()
-avg_salary = float(DEFAULT_SALARY.get(currency_code, 0))
-_settings = load_settings()
-productivity_pct = float(_settings.get("productivity_pct", 10.0))
-improvement_overrides = _settings.get("improvement_overrides", {})
-realization_recurring = _settings.get("realization_recurring", [100.0] * 5)
-realization_onetime   = _settings.get("realization_onetime",   [100.0] * 5)
-discount_rate_pct     = float(_settings.get("discount_rate_pct", 14.0))
-results = calculate_benefits(
-    revenue, acv_by_year, impl_cost, num_users, avg_salary,
-    productivity_pct, selected_areas, industry, maturity,
-    improvement_overrides=improvement_overrides,
-    realization_recurring=realization_recurring,
-    realization_onetime=realization_onetime,
-    discount_rate_pct=discount_rate_pct,
-)
+# ── Calculate button ──────────────────────────────────────────────────────────
+if _ready:
+    _calc_key = (
+        revenue, impl_cost, num_users, tuple(acv_by_year),
+        currency_code, industry, maturity, tuple(selected_areas),
+    )
+    if st.session_state.get("_calc_key") != _calc_key and "results" in st.session_state:
+        st.info("Inputs have changed. Click **Calculate** to refresh results.")
 
-# ── KPI Summary ───────────────────────────────────────────────────────────────
-st.subheader("Business Case Summary (5-Year Horizon)")
+    if st.button("🔍 Calculate Business Case", type="primary", use_container_width=True):
+        avg_salary = float(DEFAULT_SALARY.get(currency_code, 0))
+        _settings = load_settings()
+        productivity_pct      = float(_settings.get("productivity_pct", 10.0))
+        improvement_overrides = _settings.get("improvement_overrides", {})
+        realization_recurring = _settings.get("realization_recurring", [100.0] * 5)
+        realization_onetime   = _settings.get("realization_onetime",   [100.0] * 5)
+        discount_rate_pct     = float(_settings.get("discount_rate_pct", 14.0))
 
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Annual Recurring Benefit", fmt(results["annual_recurring_benefit"], currency_symbol),
-          help="Full-run annual benefit from recurring value drivers (before realization rate)")
-k2.metric("One-time Benefit", fmt(results["one_time_benefit"], currency_symbol),
-          help="Working capital release from DSO, DPO, DII improvements (before realization rate)")
-k3.metric("5-Year Total Benefit", fmt(results["five_year_benefit"], currency_symbol),
-          help="Sum of year-by-year benefits with realization rates applied (Recurring + One-time)")
-k4.metric("5-Year Net Benefit", fmt(results["net_benefit"], currency_symbol),
-          help="5-Year Total Benefit − 5-Year Total Cost")
-
-k5, k6, k7, k8 = st.columns(4)
-k5.metric(
-    f"5-Year NPV ({results['discount_rate_pct']:.0f}% discount)",
-    fmt(results["npv"], currency_symbol),
-    help=f"Net Present Value discounted at {results['discount_rate_pct']:.0f}% per year",
-)
-k6.metric(
-    "NPV-based ROI",
-    f"{results['npv_roi_pct']:.0f}%",
-    help="(5-Year NPV / 5-Year Total Cost) × 100",
-)
-irr = results.get("irr_pct")
-k7.metric(
-    "IRR",
-    f"{irr:.0f}%" if irr is not None else "N/A",
-    help="Internal Rate of Return — discount rate at which NPV = 0",
-)
-k8.metric("Payback Period", f"{results['payback_years']:.1f} yrs",
-          help="Year when cumulative benefit (recurring + one-time, with realization rates) exceeds total cost")
-
-k9, k10, k11, _ = st.columns(4)
-k9.metric("  ↳ Subscription", fmt(results["five_year_subscription"], currency_symbol))
-k10.metric("  ↳ Implementation", fmt(results["impl_cost"], currency_symbol))
-
-st.divider()
-
-# ── Detailed Breakdown ────────────────────────────────────────────────────────
-st.subheader("Value Driver Breakdown by Business Area")
-
-for area, data in results["by_area"].items():
-    with st.expander(
-        f"**{area}**  —  Recurring: {fmt(data['subtotal_recurring'], currency_symbol)} / One-time: {fmt(data['subtotal_one_time'], currency_symbol)}",
-        expanded=False,
-    ):
-        rows = []
-        for d in data["drivers"]:
-            row = {
-                "Value Driver": d["name"],
-                "Type": "One-time" if d["one_time"] else "Recurring",
-                f"Baseline ({currency_code})": fmt(d["baseline"], currency_symbol),
-                "Improvement %": f"{d['improvement_pct']:.1f}%",
-                f"Benefit ({currency_code})": fmt(d["benefit"], currency_symbol),
-            }
-            if d["baseline_type"] == "direct_spend_pct":
-                row["Spend Under Mgmt %"] = f"{d['spend_under_mgmt_pct']:.1f}%"
-                row["Sourcing Savings Rate %"] = f"{d['sourcing_savings_rate_pct']:.1f}%"
-            rows.append(row)
-        st.table(rows)
-
-# ── User Productivity ─────────────────────────────────────────────────────────
-prod = results["productivity"]
-with st.expander(
-    f"**User Productivity**  —  Annual Benefit: {fmt(prod['annual_benefit'], currency_symbol)}",
-    expanded=False,
-):
-    st.table([{
-        "Value Driver": "User Productivity Improvement",
-        "Users": f"{prod['num_users']:,}",
-        f"Avg. Annual Salary ({currency_code})": fmt(prod["avg_salary"], currency_symbol),
-        f"Total Salary Baseline ({currency_code})": fmt(prod["baseline"], currency_symbol),
-        "Benefit %": f"{prod['benefit_pct']:.1f}%",
-        f"Annual Benefit ({currency_code})": fmt(prod["annual_benefit"], currency_symbol),
-    }])
-
-st.divider()
-
-# ── Export ────────────────────────────────────────────────────────────────────
-st.subheader("Export")
-customer_name = st.text_input(
-    "Customer Name",
-    placeholder="e.g. Acme Corp",
-    key="customer_name",
-)
-
-col_png, col_pe = st.columns(2)
-
-with col_png:
-    if st.button("📊 Download Value Tree Image", type="primary", use_container_width=True):
-        from export_image import generate_value_tree_png
-        with st.spinner("Generating image..."):
-            png_bytes = generate_value_tree_png(
-                results=results,
-                customer_name=customer_name or "Customer",
-                currency_symbol=currency_symbol,
-                currency_code=currency_code,
-                industry=industry,
-                maturity_label=maturity_label,
-            )
-        st.download_button(
-            label="💾 Save PNG",
-            data=png_bytes,
-            file_name=f"ValueTree_{(customer_name or 'Customer').replace(' ', '_')}.png",
-            mime="image/png",
-            use_container_width=True,
-        )
-
-with col_pe:
-    if st.button("📈 Download Project Economics Image", type="primary", use_container_width=True):
-        from export_image import generate_project_economics_png
-        with st.spinner("Generating image..."):
-            pe_bytes = generate_project_economics_png(
-                results=results,
-                currency_symbol=currency_symbol,
-                currency_code=currency_code,
+        with st.spinner("Optimising value drivers..."):
+            scalar = find_scalar(
+                revenue, acv_by_year, impl_cost, num_users, avg_salary,
+                productivity_pct, selected_areas, industry, maturity,
+                improvement_overrides=improvement_overrides,
                 realization_recurring=realization_recurring,
                 realization_onetime=realization_onetime,
                 discount_rate_pct=discount_rate_pct,
             )
-        st.download_button(
-            label="💾 Save PNG",
-            data=pe_bytes,
-            file_name=f"ProjectEconomics_{(customer_name or 'Customer').replace(' ', '_')}.png",
-            mime="image/png",
-            use_container_width=True,
-        )
+            results = calculate_benefits(
+                revenue, acv_by_year, impl_cost, num_users, avg_salary,
+                productivity_pct, selected_areas, industry, maturity,
+                improvement_overrides=improvement_overrides,
+                realization_recurring=realization_recurring,
+                realization_onetime=realization_onetime,
+                discount_rate_pct=discount_rate_pct,
+                scalar=scalar,
+            )
+
+        st.session_state["results"]              = results
+        st.session_state["realization_recurring"] = realization_recurring
+        st.session_state["realization_onetime"]   = realization_onetime
+        st.session_state["discount_rate_pct"]     = discount_rate_pct
+        st.session_state["currency_symbol"]       = currency_symbol
+        st.session_state["currency_code"]         = currency_code
+        st.session_state["industry"]              = industry
+        st.session_state["maturity_label"]        = maturity_label
+        st.session_state["_calc_key"]             = _calc_key
+
+# ── Results (shown only after Calculate) ─────────────────────────────────────
+if "results" in st.session_state:
+    results              = st.session_state["results"]
+    realization_recurring = st.session_state["realization_recurring"]
+    realization_onetime   = st.session_state["realization_onetime"]
+    discount_rate_pct     = st.session_state["discount_rate_pct"]
+    _sym                 = st.session_state["currency_symbol"]
+    _code                = st.session_state["currency_code"]
+    _industry            = st.session_state["industry"]
+    _maturity_label      = st.session_state["maturity_label"]
+
+    # ── KPI Summary ───────────────────────────────────────────────────────────
+    st.subheader("Business Case Summary (5-Year Horizon)")
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Annual Recurring Benefit", fmt(results["annual_recurring_benefit"], _sym),
+              help="Full-run annual benefit from recurring value drivers (before realization rate)")
+    k2.metric("One-time Benefit", fmt(results["one_time_benefit"], _sym),
+              help="Working capital release from DSO, DPO, DII improvements (before realization rate)")
+    k3.metric("5-Year Total Benefit", fmt(results["five_year_benefit"], _sym),
+              help="Sum of year-by-year benefits with realization rates applied (Recurring + One-time)")
+    k4.metric("5-Year Net Benefit", fmt(results["net_benefit"], _sym),
+              help="5-Year Total Benefit − 5-Year Total Cost")
+
+    k5, k6, k7, k8 = st.columns(4)
+    k5.metric(
+        f"5-Year NPV ({results['discount_rate_pct']:.0f}% discount)",
+        fmt(results["npv"], _sym),
+        help=f"Net Present Value discounted at {results['discount_rate_pct']:.0f}% per year",
+    )
+    k6.metric(
+        "NPV-based ROI",
+        f"{results['npv_roi_pct']:.0f}%",
+        help="(5-Year NPV / 5-Year Total Cost) × 100",
+    )
+    irr = results.get("irr_pct")
+    k7.metric(
+        "IRR",
+        f"{irr:.0f}%" if irr is not None else "N/A",
+        help="Internal Rate of Return — discount rate at which NPV = 0",
+    )
+    k8.metric("Payback Period", f"{results['payback_years']:.1f} yrs",
+              help="Year when cumulative benefit (recurring + one-time, with realization rates) exceeds total cost")
+
+    k9, k10, _, __ = st.columns(4)
+    k9.metric("  ↳ Subscription", fmt(results["five_year_subscription"], _sym))
+    k10.metric("  ↳ Implementation", fmt(results["impl_cost"], _sym))
+
+    st.divider()
+
+    # ── Detailed Breakdown ────────────────────────────────────────────────────
+    st.subheader("Value Driver Breakdown by Business Area")
+
+    for area, data in results["by_area"].items():
+        with st.expander(
+            f"**{area}**  —  Recurring: {fmt(data['subtotal_recurring'], _sym)} / One-time: {fmt(data['subtotal_one_time'], _sym)}",
+            expanded=False,
+        ):
+            rows = []
+            for d in data["drivers"]:
+                row = {
+                    "Value Driver": d["name"],
+                    "Type": "One-time" if d["one_time"] else "Recurring",
+                    f"Baseline ({_code})": fmt(d["baseline"], _sym),
+                    "Improvement %": f"{d['improvement_pct']:.1f}%",
+                    f"Benefit ({_code})": fmt(d["benefit"], _sym),
+                }
+                if d["baseline_type"] == "direct_spend_pct":
+                    row["Spend Under Mgmt %"] = f"{d['spend_under_mgmt_pct']:.1f}%"
+                    row["Sourcing Savings Rate %"] = f"{d['sourcing_savings_rate_pct']:.1f}%"
+                rows.append(row)
+            st.table(rows)
+
+    # ── User Productivity ─────────────────────────────────────────────────────
+    prod = results["productivity"]
+    with st.expander(
+        f"**User Productivity**  —  Annual Benefit: {fmt(prod['annual_benefit'], _sym)}",
+        expanded=False,
+    ):
+        st.table([{
+            "Value Driver": "User Productivity Improvement",
+            "Users": f"{prod['num_users']:,}",
+            f"Avg. Annual Salary ({_code})": fmt(prod["avg_salary"], _sym),
+            f"Total Salary Baseline ({_code})": fmt(prod["baseline"], _sym),
+            "Benefit %": f"{prod['benefit_pct']:.1f}%",
+            f"Annual Benefit ({_code})": fmt(prod["annual_benefit"], _sym),
+        }])
+
+    st.divider()
+
+    # ── Export ────────────────────────────────────────────────────────────────
+    st.subheader("Export")
+    customer_name = st.text_input(
+        "Customer Name",
+        placeholder="e.g. Acme Corp",
+        key="customer_name",
+    )
+
+    col_png, col_pe = st.columns(2)
+
+    with col_png:
+        if st.button("📊 Download Value Tree Image", type="primary", use_container_width=True):
+            from export_image import generate_value_tree_png
+            with st.spinner("Generating image..."):
+                png_bytes = generate_value_tree_png(
+                    results=results,
+                    customer_name=customer_name or "Customer",
+                    currency_symbol=_sym,
+                    currency_code=_code,
+                    industry=_industry,
+                    maturity_label=_maturity_label,
+                )
+            st.download_button(
+                label="💾 Save PNG",
+                data=png_bytes,
+                file_name=f"ValueTree_{(customer_name or 'Customer').replace(' ', '_')}.png",
+                mime="image/png",
+                use_container_width=True,
+            )
+
+    with col_pe:
+        if st.button("📈 Download Project Economics Image", type="primary", use_container_width=True):
+            from export_image import generate_project_economics_png
+            with st.spinner("Generating image..."):
+                pe_bytes = generate_project_economics_png(
+                    results=results,
+                    currency_symbol=_sym,
+                    currency_code=_code,
+                    realization_recurring=realization_recurring,
+                    realization_onetime=realization_onetime,
+                    discount_rate_pct=discount_rate_pct,
+                )
+            st.download_button(
+                label="💾 Save PNG",
+                data=pe_bytes,
+                file_name=f"ProjectEconomics_{(customer_name or 'Customer').replace(' ', '_')}.png",
+                mime="image/png",
+                use_container_width=True,
+            )
 
 st.caption("Go to the **Admin** page (sidebar) to configure Value Drivers per Business Area.")
