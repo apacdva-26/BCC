@@ -274,9 +274,9 @@ def generate_project_economics_png(
     # payback 수직선
     if 0 < payback < 5:
         ax.axvline(payback - 1, color="#5D36FF", lw=1.2, linestyle="--", zorder=3)
-        ax.text(payback - 1 + 0.05, ax.get_ylim()[0] * 0.05 if ax.get_ylim()[0] < 0 else 0.2,
+        ax.text(payback - 1 + 0.05, ax.get_ylim()[1],
                 f"Breakeven\n{payback:.1f} yrs",
-                color="#5D36FF", fontsize=7.5, va="bottom", zorder=5)
+                color="#5D36FF", fontsize=7.5, va="top", zorder=5)
 
     ax.set_xticks(x)
     ax.set_xticklabels(years, fontsize=9)
