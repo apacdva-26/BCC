@@ -296,7 +296,12 @@ k6.metric(
     f"{results['npv_roi_pct']:.0f}%",
     help="(5-Year NPV / 5-Year Total Cost) × 100",
 )
-k7.metric("5-Year TCO (Total)", fmt(results["five_year_cost"], currency_symbol))
+irr = results.get("irr_pct")
+k7.metric(
+    "IRR",
+    f"{irr:.0f}%" if irr is not None else "N/A",
+    help="Internal Rate of Return — discount rate at which NPV = 0",
+)
 k8.metric("Payback Period", f"{results['payback_years']:.1f} yrs",
           help="Year when cumulative benefit (recurring + one-time, with realization rates) exceeds total cost")
 

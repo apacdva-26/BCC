@@ -301,20 +301,24 @@ def generate_project_economics_png(
                   color=C_BLACK, fontsize=10, fontweight="bold",
                   va="center", ha="center", zorder=3)
 
-    # KPI 3개: 위 70% 영역을 3등분
+    irr_pct = results.get("irr_pct")
+    irr_text = f"{irr_pct:.0f}%" if irr_pct is not None else "N/A"
+
+    # KPI 4개: 위 영역을 4등분
     kpi_top  = 1.00
-    kpi_h    = 0.21
-    kpi_gap  = 0.025
+    kpi_h    = 0.165
+    kpi_gap  = 0.018
     for i, (val, lbl) in enumerate([
         (_fmt_m(npv, currency_symbol), "5-year NPV"),
         (f"{npv_roi_pct:.0f}%",        "5-year ROI"),
+        (irr_text,                      "IRR"),
         (f"{payback:.1f} Yrs",          "Payback Period"),
     ]):
         ay = kpi_top - (i + 1) * kpi_h - i * kpi_gap
         _kpi_box(ay, kpi_h, val, lbl)
 
     # Assumptions 박스: 아래 28% 영역
-    assump_top = kpi_top - 3 * kpi_h - 2 * kpi_gap - 0.03
+    assump_top = kpi_top - 4 * kpi_h - 3 * kpi_gap - 0.02
     assump_h   = assump_top - 0.01
     _rect(ax_r, 0.02, 0.01, 0.96, assump_h, "#EEF2FA", radius=0.04, edgecolor=C_BORDER, lw=0.6, zorder=2)
 

@@ -5,3 +5,4 @@ google-auth
 matplotlib
 python-pptx
 lxml
+numpy_financial

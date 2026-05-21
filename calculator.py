@@ -1,4 +1,5 @@
 from __future__ import annotations
+import numpy_financial as npf
 from industry_data import get_benchmark, get_cogs_pct, get_mfg_cost_pct, get_direct_spend_params
 
 # Value Driver definitions
@@ -243,6 +244,14 @@ def calculate_benefits(
     )
     npv_roi_pct = (npv / total_cost * 100) if total_cost > 0 else 0
 
+    # IRR: net cash flows per year (Year 0 = first year net, no upfront lump sum separation)
+    irr_cashflows = [benefit_by_year[i] - cost_by_year[i] for i in range(5)]
+    try:
+        irr_val = npf.irr(irr_cashflows)
+        irr_pct = irr_val * 100 if irr_val is not None and not (irr_val != irr_val) else None
+    except Exception:
+        irr_pct = None
+
     # Payback: cumulative benefit vs total cost
     payback_years = 0.0
     cumulative = 0.0
@@ -279,6 +288,7 @@ def calculate_benefits(
         "roi_pct": roi_pct,
         "npv": npv,
         "npv_roi_pct": npv_roi_pct,
+        "irr_pct": irr_pct,
         "discount_rate_pct": discount_rate_pct,
         "payback_years": payback_years,
     }
