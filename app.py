@@ -195,13 +195,13 @@ with col2:
         placeholder="Enter number",
         step=50,
     )
-    if num_users:
-        st.caption(f"= {num_users:,} users")
+    select_all = st.checkbox("Select All Business Areas", value=False)
     selected_areas = st.multiselect(
         "Business Areas in Scope",
         options=BUSINESS_AREAS,
-        default=[],
+        default=BUSINESS_AREAS if select_all else [],
         help="Select the functional areas this customer will adopt",
+        disabled=select_all,
     )
 
 st.subheader(f"SAP Subscription Cost / ACV by Year ({currency_code})")
