@@ -22,8 +22,7 @@ def log_opportunity(opp_number: str) -> bool:
         try:
             creds_info = dict(st.secrets["gcp_service_account"])
             sheet_id = st.secrets["google"]["spreadsheet_id"]
-        except KeyError as e:
-            print(f"[sheets] Secret key 없음: {e} / 전체 keys: {list(st.secrets.keys())}")
+        except KeyError:
             return False
 
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -35,7 +34,5 @@ def log_opportunity(opp_number: str) -> bool:
         ws.append_row([timestamp, opp_number])
         return True
 
-    except Exception as e:
-        import traceback
-        print(f"[sheets] Google Sheets 오류: {e}\n{traceback.format_exc()}")
+    except Exception:
         return False
