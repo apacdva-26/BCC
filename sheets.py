@@ -19,10 +19,11 @@ def log_opportunity(opp_number: str) -> bool:
         return False
 
     try:
-        creds_info = st.secrets.get("gcp_service_account")
-        sheet_id = st.secrets.get("google", {}).get("spreadsheet_id", "")
-        if not creds_info or not sheet_id:
-            print(f"[sheets] Secrets 누락 — gcp_service_account: {bool(creds_info)}, sheet_id: {repr(sheet_id)}")
+        try:
+            creds_info = dict(st.secrets["gcp_service_account"])
+            sheet_id = st.secrets["google"]["spreadsheet_id"]
+        except KeyError as e:
+            print(f"[sheets] Secret key 없음: {e} / 전체 keys: {list(st.secrets.keys())}")
             return False
 
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
