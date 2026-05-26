@@ -22,7 +22,7 @@ def log_opportunity(opp_number: str) -> bool:
         creds_info = st.secrets.get("gcp_service_account")
         sheet_id = st.secrets.get("google", {}).get("spreadsheet_id", "")
         if not creds_info or not sheet_id:
-            st.error(f"Secrets 설정 누락 — gcp_service_account: {bool(creds_info)}, sheet_id: {repr(sheet_id)}")
+            print(f"[sheets] Secrets 누락 — gcp_service_account: {bool(creds_info)}, sheet_id: {repr(sheet_id)}")
             return False
 
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -36,5 +36,5 @@ def log_opportunity(opp_number: str) -> bool:
 
     except Exception as e:
         import traceback
-        st.error(f"Google Sheets 오류: {e}\n{traceback.format_exc()}")
+        print(f"[sheets] Google Sheets 오류: {e}\n{traceback.format_exc()}")
         return False
