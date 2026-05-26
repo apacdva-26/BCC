@@ -33,5 +33,7 @@ def log_opportunity(opp_number: str) -> bool:
         ws.append_row([timestamp, opp_number])
         return True
 
-    except Exception:
+    except Exception as e:
+        import traceback
+        st.error(f"Google Sheets 오류: {e}\n{traceback.format_exc()}")
         return False
