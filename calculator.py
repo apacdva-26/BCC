@@ -335,6 +335,8 @@ def find_scalar(
     n_steps = max(1, round(1.0 / scalar_step))
     candidates = [round(i / n_steps, 10) for i in range(n_steps, 0, -1)]
 
+    irr_fallback = None
+
     for s in candidates:
         r = _run(s)
         irr = r["irr_pct"]
@@ -343,5 +345,7 @@ def find_scalar(
         pb_ok  = pb_lo <= pb <= pb_hi
         if irr_ok and pb_ok:
             return s
+        if irr_fallback is None and irr is not None and irr <= irr_hi:
+            irr_fallback = s
 
-    return 1.0
+    return irr_fallback if irr_fallback is not None else 1.0
