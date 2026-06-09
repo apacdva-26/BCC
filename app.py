@@ -273,6 +273,7 @@ if _ready:
         discount_rate_pct     = float(_settings.get("discount_rate_pct", 14.0))
 
         with st.spinner("Optimising value drivers..."):
+            scalar_step = float(_settings.get("scalar_step", 0.05))
             scalar = find_scalar(
                 revenue, acv_by_year, impl_cost, num_users, avg_salary,
                 productivity_pct, selected_areas, industry, maturity,
@@ -280,6 +281,7 @@ if _ready:
                 realization_recurring=realization_recurring,
                 realization_onetime=realization_onetime,
                 discount_rate_pct=discount_rate_pct,
+                scalar_step=scalar_step,
             )
             results = calculate_benefits(
                 revenue, acv_by_year, impl_cost, num_users, avg_salary,

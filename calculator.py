@@ -311,12 +311,11 @@ def find_scalar(
     realization_onetime: list[float] | None = None,
     discount_rate_pct: float = 14.0,
     irr_target: tuple[float, float] = (15.0, 60.0),
-    payback_target: tuple[float, float] = (2.0, 3.0),
-    n_iter: int = 60,
+    payback_target: tuple[float, float] = (1.0, 2.5),
+    scalar_step: float = 0.05,
 ) -> float:
-    """Return a scalar (0,1] such that IRR lands in irr_target, Payback in payback_target.
-    IRR range is the primary constraint; Payback is secondary.
-    Falls back to 1.0 if the target is unreachable."""
+    """Return the largest discrete scalar (stepped by scalar_step) that satisfies
+    both IRR and Payback targets. Falls back to 1.0 if no candidate satisfies both."""
 
     def _run(s: float) -> dict:
         return calculate_benefits(
@@ -332,45 +331,17 @@ def find_scalar(
     irr_lo, irr_hi = irr_target
     pb_lo, pb_hi = payback_target
 
-    # If scalar=1.0 already satisfies both, return early
-    r1 = _run(1.0)
-    irr1 = r1["irr_pct"]
-    pb1  = r1["payback_years"]
-    if irr1 is not None and irr_lo <= irr1 <= irr_hi and pb_lo <= pb1 <= pb_hi:
-        return 1.0
+    # Build discrete candidates from largest to smallest
+    n_steps = max(1, round(1.0 / scalar_step))
+    candidates = [round(i / n_steps, 10) for i in range(n_steps, 0, -1)]
 
-    # Binary search: find scalar where IRR is within [irr_lo, irr_hi]
-    # scalar↑ → benefit↑ → IRR↑, so it's monotone
-    lo, hi = 0.001, 1.0
-    best_scalar = 1.0  # fallback
-    best_irr_ok = False
-
-    for _ in range(n_iter):
-        mid = (lo + hi) / 2
-        r = _run(mid)
+    for s in candidates:
+        r = _run(s)
         irr = r["irr_pct"]
         pb  = r["payback_years"]
-
         irr_ok = irr is not None and irr_lo <= irr <= irr_hi
         pb_ok  = pb_lo <= pb <= pb_hi
+        if irr_ok and pb_ok:
+            return s
 
-        if irr_ok:
-            best_scalar  = mid
-            best_irr_ok  = True
-            if pb_ok:
-                # Both conditions met — try to widen scalar toward 1.0 while keeping IRR ok
-                lo = mid
-            else:
-                # IRR ok but payback not — keep searching
-                if pb < pb_lo:
-                    # payback too short (too much benefit) → lower scalar
-                    hi = mid
-                else:
-                    # payback too long → raise scalar
-                    lo = mid
-        elif irr is None or irr < irr_lo:
-            lo = mid  # too little benefit
-        else:  # irr > irr_hi
-            hi = mid  # too much benefit
-
-    return best_scalar
+    return 1.0

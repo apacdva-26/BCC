@@ -75,7 +75,17 @@ discount_rate = st.number_input(
 
 st.divider()
 
-# ── Value Drivers by Business Area ────────────────────────────────────────────
+# ── Scalar Step ───────────────────────────────────────────────────────────────
+st.subheader("Scalar Granularity")
+st.caption("Controls how finely the benefit scalar is tuned. Larger steps = more discrete results (less likely to cluster near IRR ceiling).")
+scalar_step = st.select_slider(
+    "Scalar Step Size",
+    options=[0.05, 0.10, 0.20, 0.25, 0.50],
+    value=float(settings.get("scalar_step", 0.05)),
+    format_func=lambda x: f"{x:.0%} steps  ({round(1/x):.0f} levels)",
+)
+
+st.divider()
 st.subheader("Value Drivers")
 st.caption("Improvement % is applied on top of the industry benchmark baseline. Baseline values are determined automatically by industry and maturity selection.")
 
@@ -206,6 +216,7 @@ if st.button("💾 Save Configuration", type="primary"):
     save_settings({
         "productivity_pct": productivity_pct,
         "discount_rate_pct": discount_rate,
+        "scalar_step": scalar_step,
         "improvement_overrides": updated_overrides,
         "realization_recurring": rec_vals,
         "realization_onetime": one_vals,
