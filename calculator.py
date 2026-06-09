@@ -335,12 +335,16 @@ def find_scalar(
     n_steps = max(1, round(1.0 / scalar_step))
     candidates = [round(i / n_steps, 10) for i in range(1, n_steps + 1)]
 
-    prev_scalar = candidates[0]
+    best = candidates[0]
     for s in candidates:
         r = _run(s)
         irr = r["irr_pct"]
-        if irr is not None and irr > irr_hi:
-            return prev_scalar
-        prev_scalar = s
+        pb  = r["payback_years"]
+        irr_ok = irr is None or irr <= irr_hi
+        pb_ok  = pb <= pb_hi
+        if irr_ok and pb_ok:
+            best = s
+        else:
+            break
 
-    return candidates[-1]
+    return best
