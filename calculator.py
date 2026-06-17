@@ -331,17 +331,14 @@ def find_scalar(
     irr_lo, irr_hi = irr_target
     pb_lo, pb_hi = payback_target
 
-    # Build discrete candidates from smallest to largest
+    # Build discrete candidates from largest to smallest
     n_steps = max(1, round(1.0 / scalar_step))
-    candidates = [round(i / n_steps, 10) for i in range(1, n_steps + 1)]
+    candidates = [round(i / n_steps, 10) for i in range(n_steps, 0, -1)]
 
-    best = candidates[0]
     for s in candidates:
-        r = _run(s)
+        r  = _run(s)
         pb = r["payback_years"]
-        if pb <= pb_hi:
-            best = s
-        else:
-            break
+        if pb_lo <= pb <= pb_hi:
+            return s
 
-    return best
+    return candidates[-1]
