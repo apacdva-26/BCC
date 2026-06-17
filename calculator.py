@@ -245,8 +245,8 @@ def calculate_benefits(
     )
     npv_roi_pct = (npv / total_cost * 100) if total_cost > 0 else 0
 
-    # IRR: net cash flows per year (Year 0 = first year net, no upfront lump sum separation)
-    irr_cashflows = [benefit_by_year[i] - cost_by_year[i] for i in range(5)]
+    # IRR: Year 0 = -impl_cost, Years 1-5 = benefit - ACV
+    irr_cashflows = [-impl_cost] + [benefit_by_year[i] - acv_by_year[i] for i in range(5)]
     try:
         irr_val = npf.irr(irr_cashflows)
         irr_pct = irr_val * 100 if irr_val is not None and not (irr_val != irr_val) else None
