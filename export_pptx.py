@@ -1,10 +1,11 @@
 """
-PPTX export module for SAP Cloud ERP Business Case Calculator.
-Slide 1: Value Tree  — template LOB blocks cloned & repositioned
-Slide 2: Project Economics — template values filled in
+PPTX export — SAP Business Case Calculator
+Slide 1: Value Tree  (one column per selected business area)
+Slide 2: Project Economics (chart + KPI boxes)
 """
 from __future__ import annotations
 import copy, io
+from pathlib import Path
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
@@ -12,18 +13,20 @@ from pptx.enum.text import PP_ALIGN
 from pptx.oxml.ns import qn
 from lxml import etree
 
-TEMPLATE_PATH = "/Users/I589386/Library/CloudStorage/OneDrive-SAPSE(2)/DVA/BC Calculator/Presentation1.pptx"
+TEMPLATE_PATH = Path(__file__).parent / "Presentation1.pptx"
 
-C_BLUE    = RGBColor(0x00, 0x70, 0xF2)
-C_BLACK   = RGBColor(0x00, 0x00, 0x00)
-C_WHITE   = RGBColor(0xFF, 0xFF, 0xFF)
-C_REC     = RGBColor(0xD1, 0xEF, 0xFF)   # recurring  – light blue
-C_ONE     = RGBColor(0xE2, 0xD8, 0xFF)   # one-time   – light purple
+# ── Colors ────────────────────────────────────────────────────────────────────
+C_BLUE   = RGBColor(0x00, 0x70, 0xF2)
+C_NAVY   = RGBColor(0x00, 0x14, 0x4A)
+C_BLACK  = RGBColor(0x00, 0x00, 0x00)
+C_WHITE  = RGBColor(0xFF, 0xFF, 0xFF)
+C_REC    = RGBColor(0xD1, 0xEF, 0xFF)   # recurring  – light blue
+C_ONE    = RGBColor(0xE2, 0xD8, 0xFF)   # one-time   – light purple
 
-EMU = 914400
+EMU_PER_IN = 914400
 
 
-# ─── helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _rgb_hex(c: RGBColor) -> str:
     return f"{c[0]:02X}{c[1]:02X}{c[2]:02X}"
@@ -41,134 +44,99 @@ def _fmt_m(value: float, symbol: str) -> str:
         return f"{symbol}{value:,.0f}"
 
 
-def _set_shape_pos(shape, left_in: float, top_in: float,
-                   w_in: float | None = None, h_in: float | None = None):
+def _set_pos(shape, left_in: float, top_in: float,
+             w_in: float | None = None, h_in: float | None = None):
     sp = shape._element
-    xfrm = sp.find('.//' + qn('p:xfrm'))
-    if xfrm is None:
-        xfrm = sp.find('.//' + qn('a:xfrm'))
+    xfrm = sp.find('.//' + qn('p:xfrm')) or sp.find('.//' + qn('a:xfrm'))
     if xfrm is None:
         return
     off = xfrm.find(qn('a:off'))
     ext = xfrm.find(qn('a:ext'))
     if off is not None:
-        off.set('x', str(int(left_in * EMU)))
-        off.set('y', str(int(top_in  * EMU)))
+        off.set('x', str(int(left_in * EMU_PER_IN)))
+        off.set('y', str(int(top_in  * EMU_PER_IN)))
     if ext is not None:
         if w_in is not None:
-            ext.set('cx', str(int(w_in * EMU)))
+            ext.set('cx', str(int(w_in * EMU_PER_IN)))
         if h_in is not None:
-            ext.set('cy', str(int(h_in * EMU)))
+            ext.set('cy', str(int(h_in * EMU_PER_IN)))
 
 
-def _set_run_text(shape, text: str, para_idx: int = 0, run_idx: int = 0):
-    """Set text of a specific run in a shape's text frame."""
-    try:
-        para = shape.text_frame.paragraphs[para_idx]
-        if run_idx < len(para.runs):
-            para.runs[run_idx].text = text
-        else:
-            run = para.add_run()
-            run.text = text
-    except Exception:
-        pass
-
-
-def _clear_and_set_text(shape, lines: list[tuple[str, int, bool, RGBColor]],
-                        align=PP_ALIGN.LEFT):
-    """Replace all text in shape. lines = [(text, pt_size, bold, color), ...]"""
+def _clear_set(shape, lines: list[tuple[str, float, bool, RGBColor]],
+               align=PP_ALIGN.LEFT, font_name: str = "72 Brand"):
+    """Replace all text. lines = [(text, pt, bold, color)]"""
     tf = shape.text_frame
+    tf.word_wrap = True
     tf.clear()
     for i, (text, pt, bold, color) in enumerate(lines):
         para = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
         para.alignment = align
         run = para.add_run()
         run.text = text
+        run.font.name = font_name
         run.font.size = Pt(pt)
         run.font.bold = bold
         run.font.color.rgb = color
 
 
-def _clone_shape(slide, shape):
-    """Deep-copy shape XML and add to slide's spTree."""
+def _clone(slide, shape):
     sp_tree = slide.shapes._spTree
     new_el = copy.deepcopy(shape._element)
     sp_tree.append(new_el)
-    # Return the new shape (last added)
     return slide.shapes[-1]
 
 
-def _set_table_row_text(tbl_shape, row: int, col0: str, col1: str, col2: str,
-                         col2_fill: RGBColor):
-    """Set text in table row and optionally fill col2."""
-    table = tbl_shape.table
-    if row >= len(table.rows):
-        return
-
-    def _set(cell, txt, bold=False, align=PP_ALIGN.LEFT, fill_color=None):
-        cell.text_frame.clear()
-        para = cell.text_frame.paragraphs[0]
-        para.alignment = align
-        if txt:
-            run = para.add_run()
-            run.text = txt
-            run.font.size = Pt(8)
-            run.font.bold = bold
-            run.font.color.rgb = C_BLACK
-        if fill_color:
-            tc = cell._tc
-            tcPr = tc.find(qn('a:tcPr'))
-            if tcPr is None:
-                tcPr = etree.SubElement(tc, qn('a:tcPr'))
-            # remove existing fill
-            for existing in tcPr.findall(qn('a:solidFill')):
-                tcPr.remove(existing)
-            sf = etree.SubElement(tcPr, qn('a:solidFill'))
-            clr = etree.SubElement(sf, qn('a:srgbClr'))
-            clr.set('val', _rgb_hex(fill_color))
-
-    _set(table.cell(row, 0), col0)
-    _set(table.cell(row, 1), col1, align=PP_ALIGN.CENTER)
-    _set(table.cell(row, 2), col2, bold=True, align=PP_ALIGN.CENTER, fill_color=col2_fill)
+def _set_cell(cell, text: str, pt: float, bold: bool,
+              color: RGBColor, align=PP_ALIGN.LEFT,
+              fill: RGBColor | None = None,
+              font_name: str = "72 Brand"):
+    tf = cell.text_frame
+    tf.clear()
+    para = tf.paragraphs[0]
+    para.alignment = align
+    if text:
+        run = para.add_run()
+        run.text = text
+        run.font.name = font_name
+        run.font.size = Pt(pt)
+        run.font.bold = bold
+        run.font.color.rgb = color
+    if fill is not None:
+        tc = cell._tc
+        tcPr = tc.find(qn('a:tcPr'))
+        if tcPr is None:
+            tcPr = etree.SubElement(tc, qn('a:tcPr'))
+        for ex in tcPr.findall(qn('a:solidFill')):
+            tcPr.remove(ex)
+        sf  = etree.SubElement(tcPr, qn('a:solidFill'))
+        clr = etree.SubElement(sf, qn('a:srgbClr'))
+        clr.set('val', _rgb_hex(fill))
 
 
-def _resize_table(tbl_shape, n_rows: int, row_h_in: float = 0.28):
-    """Adjust table height and add/remove rows to match n_rows."""
-    table = tbl_shape.table
+def _resize_table(tbl_shape, n_rows: int, row_h_in: float = 0.32):
+    table  = tbl_shape.table
     tbl_el = table._tbl
-
-    # Target row height in EMU
-    target_h = int(row_h_in * EMU)
-
+    target = int(row_h_in * EMU_PER_IN)
     existing = list(tbl_el.findall(qn('a:tr')))
-    current_n = len(existing)
-
-    if n_rows > current_n:
-        # Clone last row for each missing row
-        ref_row = existing[-1]
-        for _ in range(n_rows - current_n):
-            new_row = copy.deepcopy(ref_row)
-            tbl_el.append(new_row)
-    elif n_rows < current_n:
+    cur = len(existing)
+    if n_rows > cur:
+        ref = existing[-1]
+        for _ in range(n_rows - cur):
+            tbl_el.append(copy.deepcopy(ref))
+    elif n_rows < cur:
         for row_el in existing[n_rows:]:
             tbl_el.remove(row_el)
-
-    # Update row heights and total table height
     for tr in tbl_el.findall(qn('a:tr')):
-        tr.set('h', str(target_h))
-
-    total_h = target_h * n_rows
-    xfrm = tbl_shape._element.find('.//' + qn('p:xfrm'))
-    if xfrm is None:
-        xfrm = tbl_shape._element.find('.//' + qn('a:xfrm'))
+        tr.set('h', str(target))
+    xfrm = tbl_shape._element.find('.//' + qn('p:xfrm')) or \
+           tbl_shape._element.find('.//' + qn('a:xfrm'))
     if xfrm is not None:
         ext = xfrm.find(qn('a:ext'))
         if ext is not None:
-            ext.set('cy', str(total_h))
-    return total_h / EMU
+            ext.set('cy', str(target * n_rows))
 
 
-# ─── Slide 1: Value Tree ──────────────────────────────────────────────────────
+# ── Slide 1: Value Tree ───────────────────────────────────────────────────────
 
 def _build_slide1(prs: Presentation, results: dict,
                   customer_name: str, currency_symbol: str, currency_code: str,
@@ -177,160 +145,177 @@ def _build_slide1(prs: Presentation, results: dict,
     slide = prs.slides[0]
     sp_tree = slide.shapes._spTree
 
-    # Collect template block shapes (first block = Finance, index 0)
-    lob_names_tmpl = [s for s in slide.shapes if s.name == 'Lob_Name_1']
-    ob1s_tmpl      = [s for s in slide.shapes if s.name == 'ob1']
-    rb1s_tmpl      = [s for s in slide.shapes if s.name == 'rb1']
-    tables_tmpl    = [s for s in slide.shapes if s.name == 'tbl_lob2']
-    lob4_tmpl      = next(s for s in slide.shapes if s.name == 'Lob_Name_4')
-    r99_tmpl       = next(s for s in slide.shapes if s.name == 'Rectangle: Rounded Corners 99')
-    r100_tmpl      = next(s for s in slide.shapes if s.name == 'Rectangle: Rounded Corners 100')
+    # Grab template shapes (first instance of each repeated shape)
+    def _first(name):
+        return next(s for s in slide.shapes if s.name == name)
+    def _all(name):
+        return [s for s in slide.shapes if s.name == name]
 
-    # Reference block dimensions (from template block 0)
-    ref = lob_names_tmpl[0]
-    REF_LEFT = ref.left / EMU
-    REF_TOP  = ref.top  / EMU
-    # Relative offsets
-    OB1_DL  = (ob1s_tmpl[0].left   - ref.left)   / EMU   # -0.413
-    OB1_DT  = (ob1s_tmpl[0].top    - ref.top)    / EMU   # +0.384
-    OB1_W   = ob1s_tmpl[0].width   / EMU
-    OB1_H   = ob1s_tmpl[0].height  / EMU
-    RB1_DL  = (rb1s_tmpl[0].left   - ref.left)   / EMU   # +0.702
-    RB1_DT  = OB1_DT
-    TBL_DL  = (tables_tmpl[0].left  - ref.left)  / EMU   # -0.511
-    TBL_DT  = (tables_tmpl[0].top   - ref.top)   / EMU   # +0.817
-    TBL_W   = tables_tmpl[0].width  / EMU
-    LOB_W   = ref.width  / EMU
-    LOB_H   = ref.height / EMU
+    tmpl_lob   = _all('Lob_Name_1')[0]
+    tmpl_ob1   = _all('ob1')[0]
+    tmpl_rb1   = _all('rb1')[0]
+    tmpl_tbl   = _all('tbl_lob2')[0]
 
-    # Remove all existing LOB blocks from slide
-    KEEP = {'Round Same Side Corner Rectangle 48',
-            'Rectangle: Top Corners Rounded 60',
-            'Rectangle: Top Corners Rounded 61',
-            'Rectangle 62', 'Group 63', 'Title 1',
-            'Left Bracket 98',
-            'Lob_Name_4',
-            'Rectangle: Rounded Corners 99',
-            'Rectangle: Rounded Corners 100'}
-    to_remove = [s for s in slide.shapes if s.name not in KEEP]
-    for shape in to_remove:
-        sp_tree.remove(shape._element)
+    # Template block reference geometry
+    LOB_W  = tmpl_lob.width  / EMU_PER_IN
+    LOB_H  = tmpl_lob.height / EMU_PER_IN
+    OB1_W  = tmpl_ob1.width  / EMU_PER_IN
+    OB1_H  = tmpl_ob1.height / EMU_PER_IN
+    TBL_W  = tmpl_tbl.width  / EMU_PER_IN
 
-    # Update title
-    title = next(s for s in slide.shapes if s.name == 'Title 1')
-    _clear_and_set_text(title, [("Value Tree", 14, True, C_BLACK)])
+    # Remove all existing LOB blocks (keep structural shapes)
+    KEEP = {
+        'Round Same Side Corner Rectangle 48',
+        'Rectangle: Top Corners Rounded 60',
+        'Rectangle: Top Corners Rounded 61',
+        'Rectangle 62', 'Group 63', 'Title 1',
+        'Left Bracket 98',
+        'Lob_Name_4',
+        'Rectangle: Rounded Corners 99',
+        'Rectangle: Rounded Corners 100',
+        'TextBox 24',
+        'Rounded Rectangle 7', 'Rounded Rectangle 8',
+        'Rounded Rectangle 9', 'Rounded Rectangle 10',
+    }
+    for s in [s for s in slide.shapes if s.name not in KEEP]:
+        sp_tree.remove(s._element)
 
-    # Update info box
-    info_box = next(s for s in slide.shapes if s.name == 'Rectangle 62')
-    _clear_and_set_text(info_box, [
-        (f"Currency: {currency_code}", 7, True, C_WHITE),
-        (f"Industry: {industry}", 7, False, C_WHITE),
-        (f"Maturity: {maturity_label}", 7, False, C_WHITE),
+    # Update slide title
+    _clear_set(_first('Title 1'),
+               [("Value Tree", 14, True, RGBColor(0x00, 0x2A, 0x86))],
+               align=PP_ALIGN.LEFT, font_name="72 Brand Medium")
+
+    # Update info sidebar
+    _clear_set(_first('Rectangle 62'), [
+        (f"Currency: {currency_code}",  7, True,  C_WHITE),
+        (f"Industry: {industry}",        7, False, C_WHITE),
+        (f"Maturity: {maturity_label}",  7, False, C_WHITE),
         ("*Illustrative estimates based on industry benchmarks.", 6, False, C_WHITE),
-    ])
+    ], font_name="72 Brand")
 
-    # Layout: 7 areas in 2 rows (4 + 3), fitting within slide width
-    AREAS = [
-        ["Asset Management", "Finance", "Manufacturing", "Sales"],
-        ["Procurement", "R&D", "Supply Chain"],
-    ]
+    # Determine active areas & layout
+    AREA_ORDER = ["Asset Management", "Finance", "Manufacturing",
+                  "Sales", "Procurement", "R&D", "Supply Chain"]
+    active = [a for a in AREA_ORDER if a in results["by_area"]]
+    n = len(active)
 
-    # Usable area
-    SLIDE_W     = 10.90    # inches, leaving room for info box on right
-    START_LEFT  = 0.15
-    ROW_TOPS    = [1.05, 4.10]
-    BLOCK_H     = 2.80     # total block height including table
-    ROW_H_IN    = 0.28     # each table row height
+    # Slide usable content area (left of the info sidebar)
+    SLIDE_W    = 10.70   # inches available for LoB columns
+    START_LEFT = 0.15
+    CONTENT_TOP = 2.40   # below total summary row
+    CONTENT_BOT = 7.20
+    CONTENT_H   = CONTENT_BOT - CONTENT_TOP
 
-    def _place_block(area: str, left_in: float, top_in: float, col_w: float):
+    # Layout: 1 or 2 rows
+    if n <= 4:
+        rows_layout = [active]
+    else:
+        split = (n + 1) // 2
+        rows_layout = [active[:split], active[split:]]
+
+    n_rows_layout = len(rows_layout)
+    ROW_GAP  = 0.12
+    ROW_H    = (CONTENT_H - ROW_GAP * (n_rows_layout - 1)) / n_rows_layout
+
+    # Header label top & metric box geometry
+    METRIC_GAP = 0.06
+    METRIC_H   = OB1_H
+    TBL_ROW_H  = 0.30
+
+    def _place_block(area: str, left: float, top: float, col_w: float):
         data = results["by_area"].get(area)
         if not data:
             return
 
-        rec      = data["subtotal_recurring"]
-        one      = data["subtotal_one_time"]
-        drivers  = data["drivers"]
-        n_rows   = len(drivers)
+        rec     = data["subtotal_recurring"]
+        one     = data["subtotal_one_time"]
+        drivers = data["drivers"]
 
-        # --- Clone Lob_Name_1 ---
-        lob_clone = _clone_shape(slide, lob_names_tmpl[0])
-        _set_shape_pos(lob_clone, left_in + (col_w - LOB_W) / 2, top_in,
-                       col_w * 0.80, LOB_H)
-        _clear_and_set_text(lob_clone, [(area, 8, True, C_BLACK)])
+        # LoB name label (centered in column)
+        lob = _clone(slide, tmpl_lob)
+        _set_pos(lob, left, top, col_w, LOB_H)
+        _clear_set(lob, [(area, 9, True, C_BLACK)],
+                   align=PP_ALIGN.CENTER, font_name="72 Brand Medium")
 
-        # metric boxes width: split evenly within col
-        metric_w = col_w / 2 - 0.04
-        metric_top = top_in + LOB_H + 0.05
+        metric_top = top + LOB_H + 0.04
+        metric_w   = (col_w - METRIC_GAP * 3) / 2
 
-        # --- Clone ob1 (Recurring) ---
-        ob1_clone = _clone_shape(slide, ob1s_tmpl[0])
-        _set_shape_pos(ob1_clone, left_in, metric_top, metric_w, OB1_H)
-        _clear_and_set_text(ob1_clone, [(_fmt_m(rec, currency_symbol), 9, True, C_BLACK)],
-                            align=PP_ALIGN.CENTER)
+        # Recurring box (ob1) — light blue
+        ob = _clone(slide, tmpl_ob1)
+        _set_pos(ob, left + METRIC_GAP, metric_top, metric_w, METRIC_H)
+        _clear_set(ob, [(_fmt_m(rec, currency_symbol), 9, True, C_BLACK)],
+                   align=PP_ALIGN.CENTER, font_name="72 Brand")
 
-        # --- Clone rb1 (One-time) ---
-        rb1_clone = _clone_shape(slide, rb1s_tmpl[0])
-        _set_shape_pos(rb1_clone, left_in + metric_w + 0.08, metric_top, metric_w, OB1_H)
-        _clear_and_set_text(rb1_clone,
-                            [(_fmt_m(one, currency_symbol) if one > 0 else "-", 9, True, C_BLACK)],
-                            align=PP_ALIGN.CENTER)
+        # One-time box (rb1) — light purple
+        rb = _clone(slide, tmpl_rb1)
+        _set_pos(rb, left + METRIC_GAP * 2 + metric_w, metric_top, metric_w, METRIC_H)
+        _clear_set(rb,
+                   [(_fmt_m(one, currency_symbol) if one > 0 else "—", 9, True, C_BLACK)],
+                   align=PP_ALIGN.CENTER, font_name="72 Brand")
 
-        # --- Clone tbl_lob2 ---
-        tbl_clone = _clone_shape(slide, tables_tmpl[0])
-        tbl_top   = metric_top + OB1_H + 0.05
-        tbl_h_avail = BLOCK_H - (tbl_top - top_in) - 0.05
-        _set_shape_pos(tbl_clone, left_in, tbl_top, col_w, None)
+        # Detail table
+        tbl_top  = metric_top + METRIC_H + 0.06
+        tbl_h_avail = (top + ROW_H) - tbl_top - 0.05
+        n_drv    = max(len(drivers), 1)
+        row_h    = min(TBL_ROW_H, tbl_h_avail / n_drv)
 
-        # Adjust row count & height
-        _resize_table(tbl_clone, n_rows, min(ROW_H_IN, tbl_h_avail / max(n_rows, 1)))
+        tbl = _clone(slide, tmpl_tbl)
+        _set_pos(tbl, left + METRIC_GAP * 0.5, tbl_top, col_w - METRIC_GAP, None)
+        _resize_table(tbl, n_drv, row_h)
 
-        # Fill table rows
-        for r, d in enumerate(drivers):
-            fill = C_ONE if d["one_time"] else C_REC
-            _set_table_row_text(
-                tbl_clone, r,
-                d["name"],
-                f"{d['improvement_pct']:.0f}%",
-                _fmt_m(d["benefit"], currency_symbol),
-                fill
-            )
+        col_widths_in = [col_w * 0.55, col_w * 0.18, col_w * 0.27]
+        tbl_el = tbl.table._tbl
+        tblGrid = tbl_el.find(qn('a:tblGrid'))
+        if tblGrid is not None:
+            cols = tblGrid.findall(qn('a:gridCol'))
+            for ci, cw in enumerate(col_widths_in):
+                if ci < len(cols):
+                    cols[ci].set('w', str(int(cw * EMU_PER_IN)))
 
-    # Draw rows
-    for row_idx, row_areas in enumerate(AREAS):
-        n = len(row_areas)
-        col_w = SLIDE_W / n
-        for col_idx, area in enumerate(row_areas):
-            left = START_LEFT + col_idx * col_w
-            _place_block(area, left, ROW_TOPS[row_idx], col_w)
+        for ri, d in enumerate(drivers):
+            fill_color = C_ONE if d["one_time"] else C_REC
+            row_obj = tbl.table.rows[ri]
+            _set_cell(row_obj.cells[0], d["name"],
+                      7, False, C_BLACK, PP_ALIGN.LEFT, font_name="72 Brand")
+            _set_cell(row_obj.cells[1], f"{d['improvement_pct']:.0f}%",
+                      7, False, C_BLACK, PP_ALIGN.CENTER, font_name="72 Brand")
+            _set_cell(row_obj.cells[2], _fmt_m(d["benefit"], currency_symbol),
+                      7, True, C_BLACK, PP_ALIGN.CENTER, fill_color, font_name="72 Brand")
 
-    # User Productivity in total
-    prod         = results["productivity"]
-    total_rec    = results["annual_recurring_benefit"]
-    total_one    = results["one_time_benefit"]
+    # Place all blocks
+    for ri, row_areas in enumerate(rows_layout):
+        nc     = len(row_areas)
+        col_w  = SLIDE_W / nc
+        row_top = CONTENT_TOP + ri * (ROW_H + ROW_GAP)
+        for ci, area in enumerate(row_areas):
+            _place_block(area, START_LEFT + ci * col_w, row_top, col_w)
 
-    # Update Lob_Name_4 (total label)
-    lob4 = next(s for s in slide.shapes if s.name == 'Lob_Name_4')
-    _clear_and_set_text(lob4, [
-        (f"Total Steady-state Value Potential for {customer_name}", 10, True, C_BLACK),
-    ])
-    _set_shape_pos(lob4, START_LEFT, 0.62, SLIDE_W, 0.32)
+    # Total summary row
+    total_rec = results["annual_recurring_benefit"]
+    total_one = results["one_time_benefit"]
+    prod_ben  = results["productivity"]["annual_benefit"]
+    total_all = total_rec + total_one
 
-    # Update r99 (recurring total)
-    r99 = next(s for s in slide.shapes if s.name == 'Rectangle: Rounded Corners 99')
-    _set_shape_pos(r99, START_LEFT + SLIDE_W * 0.55, 0.62, 2.0, 0.32)
-    _clear_and_set_text(r99,
-        [(f"Recurring: {_fmt_m(total_rec, currency_symbol)}", 10, True, C_BLACK)],
-        align=PP_ALIGN.CENTER)
+    lob4 = _first('Lob_Name_4')
+    _set_pos(lob4, START_LEFT, 1.44, SLIDE_W, 0.50)
+    _clear_set(lob4, [
+        (f"Total Steady-state Value Potential for {customer_name}", 12, True, C_BLUE),
+    ], align=PP_ALIGN.LEFT, font_name="72 Brand Medium")
 
-    # Update r100 (one-time total)
-    r100 = next(s for s in slide.shapes if s.name == 'Rectangle: Rounded Corners 100')
-    _set_shape_pos(r100, START_LEFT + SLIDE_W * 0.55 + 2.1, 0.62, 2.0, 0.32)
-    _clear_and_set_text(r100,
-        [(f"One-time: {_fmt_m(total_one, currency_symbol)}", 10, True, C_BLACK)],
-        align=PP_ALIGN.CENTER)
+    r99 = _first('Rectangle: Rounded Corners 99')
+    _set_pos(r99, START_LEFT + SLIDE_W * 0.42, 1.98, 2.10, 0.34)
+    _clear_set(r99,
+               [(f"Recurring: {_fmt_m(total_rec + prod_ben, currency_symbol)}", 10, True, C_BLACK)],
+               align=PP_ALIGN.CENTER, font_name="72 Brand")
+
+    r100 = _first('Rectangle: Rounded Corners 100')
+    _set_pos(r100, START_LEFT + SLIDE_W * 0.42 + 2.20, 1.98, 2.10, 0.34)
+    _clear_set(r100,
+               [(f"One-time: {_fmt_m(total_one, currency_symbol)}", 10, True, C_BLACK)],
+               align=PP_ALIGN.CENTER, font_name="72 Brand")
 
 
-# ─── Slide 2: Project Economics ───────────────────────────────────────────────
+# ── Slide 2: Project Economics ────────────────────────────────────────────────
 
 def _build_slide2(prs: Presentation, results: dict,
                   currency_symbol: str, currency_code: str,
@@ -342,16 +327,16 @@ def _build_slide2(prs: Presentation, results: dict,
 
     slide = prs.slides[1]
 
-    acv_by_year = results["acv_by_year"]
-    impl_cost   = results["impl_cost"]
-    rec_annual  = results["annual_recurring_benefit"]
-    one_total   = results["one_time_benefit"]
-    real_rec    = [r / 100.0 for r in realization_recurring]
-    real_one    = [r / 100.0 for r in realization_onetime]
+    acv_by_year     = results["acv_by_year"]
+    impl_cost       = results["impl_cost"]
+    rec_annual      = results["annual_recurring_benefit"]
+    one_total       = results["one_time_benefit"]
+    real_rec        = [r / 100.0 for r in realization_recurring]
+    real_one        = [r / 100.0 for r in realization_onetime]
 
-    rec_by_year  = [rec_annual * real_rec[i] for i in range(5)]
-    one_by_year  = [one_total  * real_one[i] for i in range(5)]
-    cost_by_year = [acv_by_year[i] + (impl_cost if i == 0 else 0) for i in range(5)]
+    rec_by_year     = [rec_annual * real_rec[i] for i in range(5)]
+    one_by_year     = [one_total  * real_one[i] for i in range(5)]
+    cost_by_year    = [acv_by_year[i] + (impl_cost if i == 0 else 0) for i in range(5)]
     benefit_by_year = results["benefit_by_year"]
 
     cumulative = []
@@ -360,24 +345,25 @@ def _build_slide2(prs: Presentation, results: dict,
         cum += benefit_by_year[i] - cost_by_year[i]
         cumulative.append(cum)
 
-    # Chart
+    # Chart data
     chart_shape = next(s for s in slide.shapes if s.name == 'Chart 17')
-    chart = chart_shape.chart
     cd = ChartData()
     cd.categories = ['Year 1', 'Year 2', 'Year 3', 'Year 4', 'Year 5']
-    cd.add_series('SAP Subscription Cost',           [-v / 1e6 for v in acv_by_year])
-    cd.add_series('Partner Implementation Cost',     [-impl_cost / 1e6, 0, 0, 0, 0])
-    cd.add_series('Recurring Annual Benefits',        [v / 1e6 for v in rec_by_year])
-    cd.add_series('One-time Free Cashflow Benefits',  [v / 1e6 for v in one_by_year])
-    cd.add_series('Cumulative Benefits',              [v / 1e6 for v in cumulative])
-    chart.replace_data(cd)
+    cd.add_series('SAP Subscription Cost',          [-v / 1e6 for v in acv_by_year])
+    cd.add_series('Partner Implementation Cost',    [-impl_cost / 1e6, 0, 0, 0, 0])
+    cd.add_series('Recurring Annual Benefits',       [v / 1e6 for v in rec_by_year])
+    cd.add_series('One-time Free Cashflow Benefits', [v / 1e6 for v in one_by_year])
+    cd.add_series('Cumulative Benefits',             [v / 1e6 for v in cumulative])
+    chart_shape.chart.replace_data(cd)
 
     # KPI boxes
     npv         = results["npv"]
     npv_roi_pct = results["npv_roi_pct"]
     payback     = results["payback_years"]
+    irr         = results.get("irr_pct")
+    irr_text    = f"{irr:.0f}%" if irr is not None else "N/A"
 
-    def _set_kpi(shape_name, val_text, label_text):
+    def _set_kpi(shape_name: str, val_text: str, label_text: str):
         shape = next(s for s in slide.shapes if s.name == shape_name)
         tf = shape.text_frame
         tf.clear()
@@ -385,6 +371,7 @@ def _build_slide2(prs: Presentation, results: dict,
         p1.alignment = PP_ALIGN.CENTER
         r1 = p1.add_run()
         r1.text = val_text
+        r1.font.name = "72 Brand"
         r1.font.size = Pt(16)
         r1.font.bold = True
         r1.font.color.rgb = C_BLUE
@@ -392,6 +379,7 @@ def _build_slide2(prs: Presentation, results: dict,
         p2.alignment = PP_ALIGN.CENTER
         r2 = p2.add_run()
         r2.text = label_text
+        r2.font.name = "72 Brand"
         r2.font.size = Pt(11)
         r2.font.bold = True
         r2.font.color.rgb = C_BLACK
@@ -405,25 +393,25 @@ def _build_slide2(prs: Presentation, results: dict,
     be.text_frame.paragraphs[0].runs[0].text = f"Breakeven at {payback:.1f} years"
 
     # Assumptions box
-    assump = next(s for s in slide.shapes if s.name == 'Rectangle 23')
     rec_str = " / ".join(f"{r:.0f}%Y{i+1}" for i, r in enumerate(realization_recurring))
     one_str = " / ".join(f"{r:.0f}%Y{i+1}" for i, r in enumerate(realization_onetime))
-    _clear_and_set_text(assump, [
-        ("Assumptions for Benefits:", 7, True,  C_BLACK),
-        ("Benefits estimated based on outside-in, conservative benchmarks.", 6.5, False, C_BLACK),
-        ("Annual amounts shown in nominal value (no inflation adjustment).", 6.5, False, C_BLACK),
-        (f"Recurring realization: {rec_str}", 6.5, False, C_BLACK),
-        (f"One-time realization:  {one_str}",  6.5, False, C_BLACK),
-        ("", 4, False, C_BLACK),
-        ("Assumptions for Costs:", 7, True,  C_BLACK),
-        ("All costs are illustrative only.", 6.5, False, C_BLACK),
-        (f"Discount rate: {discount_rate_pct:.0f}% for NPV calculation.", 6.5, False, C_BLACK),
-        ("Subscription costs as per TCO comparison.", 6.5, False, C_BLACK),
-        ("*Illustrative estimates only. Further discovery required.", 6, False, C_BLACK),
-    ])
+    assump = next(s for s in slide.shapes if s.name == 'Rectangle 23')
+    _clear_set(assump, [
+        ("Assumptions for Benefits:",                                           7,   True,  C_BLACK),
+        ("Benefits estimated based on outside-in, conservative benchmarks.",    6.5, False, C_BLACK),
+        ("Annual amounts shown in nominal value (no inflation adjustment).",    6.5, False, C_BLACK),
+        (f"Recurring realization: {rec_str}",                                   6.5, False, C_BLACK),
+        (f"One-time realization:  {one_str}",                                   6.5, False, C_BLACK),
+        ("",                                                                    4,   False, C_BLACK),
+        ("Assumptions for Costs:",                                              7,   True,  C_BLACK),
+        ("All costs are illustrative only.",                                    6.5, False, C_BLACK),
+        (f"Discount rate: {discount_rate_pct:.0f}% for NPV calculation.",       6.5, False, C_BLACK),
+        ("Subscription costs as per TCO comparison.",                           6.5, False, C_BLACK),
+        ("*Illustrative estimates only. Further discovery required.",           6,   False, C_BLACK),
+    ], font_name="72 Brand")
 
 
-# ─── Public API ───────────────────────────────────────────────────────────────
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def generate_pptx(
     results: dict,
@@ -436,7 +424,7 @@ def generate_pptx(
     realization_onetime: list[float],
     discount_rate_pct: float,
 ) -> bytes:
-    prs = Presentation(TEMPLATE_PATH)
+    prs = Presentation(str(TEMPLATE_PATH))
     _build_slide1(prs, results, customer_name, currency_symbol, currency_code,
                   industry, maturity_label)
     _build_slide2(prs, results, currency_symbol, currency_code,

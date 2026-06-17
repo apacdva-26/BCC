@@ -443,4 +443,26 @@ if "results" in st.session_state:
                 use_container_width=True,
             )
 
+    if st.button("📑 Download PowerPoint (Value Tree + Project Economics)", type="primary", use_container_width=True):
+        from export_pptx import generate_pptx
+        with st.spinner("Generating PowerPoint..."):
+            pptx_bytes = generate_pptx(
+                results=results,
+                customer_name=customer_name or "Customer",
+                currency_symbol=_sym,
+                currency_code=_code,
+                industry=_industry,
+                maturity_label=_maturity_label,
+                realization_recurring=realization_recurring,
+                realization_onetime=realization_onetime,
+                discount_rate_pct=discount_rate_pct,
+            )
+        st.download_button(
+            label="💾 Save PPTX",
+            data=pptx_bytes,
+            file_name=f"BusinessCase_{(customer_name or 'Customer').replace(' ', '_')}.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            use_container_width=True,
+        )
+
 st.caption("Go to the **Admin** page (sidebar) to configure Value Drivers per Business Area.")
